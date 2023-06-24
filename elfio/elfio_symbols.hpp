@@ -86,7 +86,28 @@ template <class S> class symbol_section_accessor_template
 
         return ret;
     }
+    //------------------------------------------------------------------------------
+    bool update_symbol(Elf_Xword      index,
+                     Elf64_Addr    value,
+                     Elf_Xword     size,
+                     unsigned char bind,
+                     unsigned char type,
+                     Elf_Half      section_index,
+                     unsigned char other )
+    {
+        bool ret = false;
+        std::string  name;
+        if ( elf_file.get_class() == ELFCLASS32 ) {
+            ret = generic_update_symbol<Elf32_Sym>( index, name, value, size, bind,
+                                                 type, section_index, other );
+        }
+        else {
+            ret = generic_update_symbol<Elf64_Sym>( index, name, value, size, bind,
+                                                 type, section_index, other );
+        }
 
+        return ret;
+    }
     //------------------------------------------------------------------------------
     bool get_symbol( const std::string& name,
                      Elf64_Addr&        value,
@@ -259,6 +280,33 @@ template <class S> class symbol_section_accessor_template
     }
 
     //------------------------------------------------------------------------------
+
+    template <class T>
+    void generic_update_symbols(std::function<uint32_t(Elf_Xword,const std::string&, T&)> updater) 
+    {
+    
+        const endianess_convertor& convertor = elf_file.get_convertor();
+        section* string_section =  elf_file.sections[get_string_table_index()];
+        string_section_accessor str_reader(string_section);
+
+        for ( Elf_Xword i = 0; i < get_symbols_num(); i++ ) {
+            T* symPtr = get_symbol_ptr<T>( i );
+            if ( symPtr == nullptr ) {
+                continue;
+            }
+            std::string sym_name;
+            const char* pStr = str_reader.get_string(convertor(symPtr->st_name));
+            if ( nullptr != pStr ) {
+                sym_name = pStr;
+            }  
+            if (updater(i, sym_name, *symPtr) ) {
+                return;
+            }
+        }
+
+        return;
+    }
+    //------------------------------------------------------------------------------
   private:
     //------------------------------------------------------------------------------
     void find_hash_section()
@@ -405,6 +453,19 @@ template <class S> class symbol_section_accessor_template
         return nullptr;
     }
 
+    template <class T> T* get_symbol_ptr( Elf_Xword index ) const
+    {
+        if ( 0 != symbol_section->get_data() && index < get_symbols_num() ) {
+            auto *ptr = symbol_section->get_data() +  index * symbol_section->get_entry_size();
+
+            T* pSym = reinterpret_cast<T*>(const_cast<char *>(ptr));
+
+            return pSym;
+        }
+
+        return nullptr;
+    }
+
     //------------------------------------------------------------------------------
     template <class T>
     bool generic_search_symbols( std::function<bool( const T* )> match,
@@ -460,6 +521,41 @@ template <class S> class symbol_section_accessor_template
             type          = ELF_ST_TYPE( pSym->st_info );
             section_index = convertor( pSym->st_shndx );
             other         = pSym->st_other;
+
+            ret = true;
+        }
+
+        return ret;
+    }
+
+    //------------------------------------------------------------------------------
+    template <class T>
+    bool generic_update_symbol( Elf_Xword      index,
+                                std::string&   name,
+                             Elf64_Addr    value,
+                             Elf_Xword     size,
+                             unsigned char bind,
+                             unsigned char type,
+                             Elf_Half      section_index,
+                             unsigned char other )
+    {
+        bool ret = false;
+
+        if ( nullptr != symbol_section->get_data() &&
+             index < get_symbols_num() ) {
+            T* sym = reinterpret_cast<T*>(const_cast<char*>(symbol_section->get_data())
+                + index * symbol_section->get_entry_size() );
+
+            const endianess_convertor& convertor = elf_file.get_convertor();
+            unsigned char info = ELF_ST_INFO(bind, type);
+            T &entry = *sym;
+            entry.st_value = decltype( entry.st_value )( value );
+            entry.st_value = convertor( entry.st_value );
+            entry.st_size  = decltype( entry.st_size )( size );
+            entry.st_size  = convertor( entry.st_size );
+            entry.st_info  = convertor( info );
+            entry.st_other = convertor( other );
+            entry.st_shndx = convertor( section_index );
 
             ret = true;
         }
